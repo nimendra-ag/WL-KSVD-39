@@ -14,9 +14,12 @@ from sklearn.calibration import CalibratedClassifierCV
 from utils.graph_data import GraphDataLoader
 
 N_RUNS = 5
-n_dimensions = 1024
+n_dimensions = 128
 
-graphDataLoader = GraphDataLoader(dataset_id=33)
+DATASET_ID = 1
+DATASET_NAME = f"NCI_full / {DATASET_ID}total-connect.sdf"
+
+graphDataLoader = GraphDataLoader(dataset_id=DATASET_ID)
 graphs, y = graphDataLoader.nci_full_graphs, graphDataLoader.nci_full_labels
 
 # metrics collected across runs, per model
