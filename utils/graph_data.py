@@ -12,8 +12,9 @@ DATASETS_DIR = "datasets"
 
 
 class GraphDataLoader:
-    def __init__(self):
-        self.nci_full_graphs, self.nci_full_labels = self.load_nci_full()
+    def __init__(self, dataset_id):
+        self.dataset_id = dataset_id
+        self.nci_full_graphs, self.nci_full_labels = self.load_nci_full(dataset_id)
         self._initialized = True
 
     def load_nci_full(self, id=1):

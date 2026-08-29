@@ -16,7 +16,7 @@ from utils.graph_data import GraphDataLoader
 N_RUNS = 5
 n_dimensions = 1024
 
-graphDataLoader = GraphDataLoader()
+graphDataLoader = GraphDataLoader(dataset_id=33)
 graphs, y = graphDataLoader.nci_full_graphs, graphDataLoader.nci_full_labels
 
 # metrics collected across runs, per model
@@ -120,7 +120,7 @@ for model_name, metrics in results.items():
 results_dir = os.path.join(os.path.dirname(__file__), "..", "results")
 os.makedirs(results_dir, exist_ok=True)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-results_path = os.path.join(results_dir, f"wl_aksvd_results_{n_dimensions}_{timestamp}.txt")
+results_path = os.path.join(results_dir, f"wl_aksvd_results_nci_{graphDataLoader.dataset_id}_{n_dimensions}_{timestamp}.txt")
 
 with open(results_path, "w") as f:
     f.write("\n".join(summary_lines) + "\n")

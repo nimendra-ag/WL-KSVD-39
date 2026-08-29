@@ -3,8 +3,8 @@ import random
 import networkx as nx
 from typing import List
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-from graph_encoders.wl import WeisfeilerLehmanHashing
-from dict_learners.ksvd import ApproximateKSVD
+from karateclub.utils.treefeatures import WeisfeilerLehmanHashing
+from ksvd import ApproximateKSVD
 from collections import Counter
 
 class WL_KSVD():
