@@ -37,7 +37,7 @@ class WL_KSVD(Estimator):
         self,
         wl_iterations: int = 2,
         attributed: bool = False,
-        dimensions: int = 1024,
+        dimensions: int = 128,
         workers: int = 4,
         down_sampling: float = 0.0001,
         epochs: int = 10,
@@ -101,6 +101,10 @@ class WL_KSVD(Estimator):
         d2v_model.prepare_vocab(update=False, keep_raw_vocab=True, trim_rule=None)
 
         sorted_vocab = (sorted(d2v_model.raw_vocab.items(), key=lambda item: item[1], reverse=True))
+
+        # Full WL feature set before the fixed top-n_vocab truncation, so callers
+        # can report how many features the cut kept out of how many there were.
+        self.n_features_total_ = len(sorted_vocab)
 
         trimmed_vocab = sorted_vocab[0:self.n_vocab]
 
