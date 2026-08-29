@@ -14,9 +14,12 @@ from sklearn.calibration import CalibratedClassifierCV
 from utils.graph_data import GraphDataLoader
 
 N_RUNS = 5
-n_dimensions = 1024
+# Dictionary size: number of KSVD atoms, i.e. the embedding dimensionality.
+n_dimensions = 512
+DATASET_ID = 1
+DATASET_NAME = f"NCI_full / {DATASET_ID}total-connect.sdf"
 
-graphDataLoader = GraphDataLoader(dataset_id=1)
+graphDataLoader = GraphDataLoader(dataset_id=DATASET_ID)
 graphs, y = graphDataLoader.nci_full_graphs, graphDataLoader.nci_full_labels
 
 # metrics collected across runs, per model
@@ -26,6 +29,13 @@ results = {
     "SVM": {"auc": [], "f1": []},
     "Random Forest": {"auc": [], "f1": []},
 }
+
+# per-run bookkeeping: the seed and the vocabulary size the adaptive cut kept.
+# Feature counts are shared by every model in a run, so they live here rather
+# than being duplicated inside `results`.
+run_seeds = []
+run_features_selected = []
+run_features_total = []
 
 start_time = time.perf_counter()
 
@@ -46,6 +56,14 @@ for run in range(N_RUNS):
     model = WL_KSVD(seed=seed, dimensions=n_dimensions, y_vocab_train=y_vocab_train)
     model.fit(G_vocab_train)
     X_vocab_train = model.get_embedding()
+
+    # Vocabulary size after the adaptive (energy) cut, out of the full WL feature set
+    n_features_selected = model.n_vocab
+    n_features_total = len(model.selection_scores_)
+    run_seeds.append(seed)
+    run_features_selected.append(n_features_selected)
+    run_features_total.append(n_features_total)
+    print(f"Features kept: {n_features_selected} / {n_features_total}")
 
     # Infer the embedding of the ML training set
     X_ML_train = model.infer(G_ML_train)
@@ -101,20 +119,34 @@ duration = end_time - start_time
 # Summarize mean/std across runs
 summary_lines = [
     f"WL+KSVD results over {N_RUNS} runs",
+    f"Dataset: {DATASET_NAME} ({len(graphs)} graphs)",
+    f"Dictionary size (KSVD atoms): {n_dimensions}",
     f"Generated: {datetime.now().isoformat(timespec='seconds')}",
     f"Total execution time: {duration:.2f} seconds",
     "",
 ]
 
+header = f"{'run':>4} {'seed':>6} {'features':>10} {'AUC':>8} {'F1':>8}"
+
 print("\n===== Summary (mean +/- std over {} runs) =====".format(N_RUNS))
+print(f"Dataset: {DATASET_NAME} | Dictionary size: {n_dimensions}")
 for model_name, metrics in results.items():
     auc_mean, auc_std = np.mean(metrics["auc"]), np.std(metrics["auc"])
     f1_mean, f1_std = np.mean(metrics["f1"]), np.std(metrics["f1"])
     line = f"{model_name}: AUC = {auc_mean:.4f} +/- {auc_std:.4f}, F1 = {f1_mean:.4f} +/- {f1_std:.4f}"
     print(line)
     summary_lines.append(line)
-    summary_lines.append(f"  AUC per run: {['%.4f' % v for v in metrics['auc']]}")
-    summary_lines.append(f"  F1 per run:  {['%.4f' % v for v in metrics['f1']]}")
+
+    # Per-run detail: seed and kept-feature count next to that run's scores
+    print("  " + header)
+    summary_lines.append("  " + header)
+    for i in range(len(metrics["auc"])):
+        features = f"{run_features_selected[i]}/{run_features_total[i]}"
+        row = (f"{i + 1:>4} {run_seeds[i]:>6} {features:>10} "
+               f"{metrics['auc'][i]:>8.4f} {metrics['f1'][i]:>8.4f}")
+        print("  " + row)
+        summary_lines.append("  " + row)
+    summary_lines.append("")
 
 # Save results to file
 results_dir = os.path.join(os.path.dirname(__file__), "..", "results")
