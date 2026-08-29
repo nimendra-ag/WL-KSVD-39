@@ -200,11 +200,14 @@ def _active_cut(active, elbow, energy_cut, n, y):
     return elbow
 
 
-def _summary_box(ax, n, elbow, energy_cut, active, energy, x=0.985, y=0.60):
+def _summary_box(ax, n, elbow, energy_cut, active, energy, x=0.985, y=0.60,
+                 percentiles=True):
     """Both data-driven cuts vs the fixed-fraction cuts, as a monospace panel.
 
     The active cut (the one actually applied to the vocab) is flagged with a
     ``<`` marker so the figure and the trained model cannot silently disagree.
+    Pass ``percentiles=False`` to drop the fixed-fraction reference rows, for
+    figures that make their point without that baseline.
     """
     def _tag(name):
         return " <-- selected" if name == active else ""
@@ -216,10 +219,13 @@ def _summary_box(ax, n, elbow, energy_cut, active, energy, x=0.985, y=0.60):
         f"energy {energy:<5.4g} keep: {energy_cut.n_keep} "
         f"({100.0 * energy_cut.n_keep / n:.1f}%)" + _tag("energy"),
         f"energy threshold: {energy_cut.threshold:.6g}",
-        f"25th pct keep  : {min(int(round(n * 0.25)), n)}",
-        f"50th pct keep  : {min(int(round(n * 0.50)), n)}",
-        f"75th pct keep  : {min(int(round(n * 0.75)), n)}",
     ]
+    if percentiles:
+        lines += [
+            f"25th pct keep  : {min(int(round(n * 0.25)), n)}",
+            f"50th pct keep  : {min(int(round(n * 0.50)), n)}",
+            f"75th pct keep  : {min(int(round(n * 0.75)), n)}",
+        ]
     if active == "none":
         # Neither cut carries the "selected" tag in this case, so say plainly
         # what was applied rather than leaving the reader to infer it.
@@ -622,11 +628,6 @@ def plot_cdf_curve(scores, save_path, sorted_desc=True, min_keep=1, title=None,
     # the energy target: a horizontal line at F = energy, met at the energy cut
     ax.axhline(energy, color=ENERGY_COLOR, ls="--", lw=1.2)
 
-    # faint percentile references, for parity with the other figures
-    for p, c in PCT_COLORS.items():
-        idx = min(int(round(n * p / 100.0)), n - 1)
-        ax.axvline(idx + 1, color=c, ls="--", lw=0.8, alpha=0.5)
-
     # elbow cut: keeps few features, but see how much mass they already hold
     sel = " (selected)" if active == "elbow" else ""
     ax.axvline(elbow.idx + 1, color=ELBOW_COLOR, ls="--", lw=1.0, alpha=0.85)
@@ -657,7 +658,8 @@ def plot_cdf_curve(scores, save_path, sorted_desc=True, min_keep=1, title=None,
     ax.set_ylim(0, 1.05)
     ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
     ax.grid(True, which="both", alpha=0.25)
-    _summary_box(ax, n, elbow, energy_cut, active, energy, y=0.55)
+    _summary_box(ax, n, elbow, energy_cut, active, energy, y=0.55,
+                 percentiles=False)
     ax.text(
         0.5, -0.13,
         "height = fraction of the summed discriminative score held by the top-k features; "

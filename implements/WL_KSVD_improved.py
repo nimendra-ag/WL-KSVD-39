@@ -35,7 +35,7 @@ class WL_KSVD():
         self,
         wl_iterations: int = 2,
         attributed: bool = True,
-        dimensions: int = 512,
+        dimensions: int = 128,
         workers: int = 4,
         down_sampling: float = 0.0001,
         epochs: int = 10,

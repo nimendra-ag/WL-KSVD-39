@@ -12,12 +12,22 @@ from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 from utils.graph_data import GraphDataLoader
+from utils.elbow import plot_cdf_curve
 
 N_RUNS = 5
 # Dictionary size: number of KSVD atoms, i.e. the embedding dimensionality.
 n_dimensions = 512
 DATASET_ID = 1
 DATASET_NAME = f"NCI_full / {DATASET_ID}total-connect.sdf"
+# Slug used to name this dataset's output folders (one per dataset, not per run).
+DATASET_SLUG = f"nci_full_{DATASET_ID}"
+
+# One timestamp for the whole execution, shared by the results file and the
+# per-seed analytics folder so the two can be matched up afterwards.
+RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), "..", "results")
+# results/analytics/<dataset>/<execution timestamp>/seed_<seed>_cdf.png
+ANALYTICS_DIR = os.path.join(RESULTS_DIR, "analytics", DATASET_SLUG, RUN_TIMESTAMP)
 
 graphDataLoader = GraphDataLoader(dataset_id=DATASET_ID)
 graphs, y = graphDataLoader.nci_full_graphs, graphDataLoader.nci_full_labels
@@ -64,6 +74,17 @@ for run in range(N_RUNS):
     run_features_selected.append(n_features_selected)
     run_features_total.append(n_features_total)
     print(f"Features kept: {n_features_selected} / {n_features_total}")
+
+    # Curve B: how much of the summed discriminative score the kept features
+    # hold. One figure per seed, since each seed trains on a different split.
+    cdf_path = plot_cdf_curve(
+        model.selection_scores_,
+        os.path.join(ANALYTICS_DIR, f"seed_{seed}_cdf.png"),
+        title=f"{DATASET_SLUG} / seed {seed}",
+        selection=model.selection,
+        energy=model.energy,
+    )
+    print(f"Feature-selection CDF saved to {cdf_path}")
 
     # Infer the embedding of the ML training set
     X_ML_train = model.infer(G_ML_train)
@@ -149,10 +170,8 @@ for model_name, metrics in results.items():
     summary_lines.append("")
 
 # Save results to file
-results_dir = os.path.join(os.path.dirname(__file__), "..", "results")
-os.makedirs(results_dir, exist_ok=True)
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-results_path = os.path.join(results_dir, f"wl_aksvd_improved_results_nci_{graphDataLoader.dataset_id}_{n_dimensions}_{timestamp}.txt")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+results_path = os.path.join(RESULTS_DIR, f"wl_aksvd_improved_results_nci_{graphDataLoader.dataset_id}_{n_dimensions}_{RUN_TIMESTAMP}.txt")
 
 with open(results_path, "w") as f:
     f.write("\n".join(summary_lines) + "\n")
