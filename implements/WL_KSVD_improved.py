@@ -3,9 +3,10 @@ import random
 import networkx as nx
 from typing import List
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-from graph_encoders.wl import WeisfeilerLehmanHashing
-from dict_learners.ksvd import ApproximateKSVD
+from karateclub.utils.treefeatures import WeisfeilerLehmanHashing
+from ksvd import ApproximateKSVD
 from collections import Counter
+from utils.elbow import find_elbow_cut, find_energy_cut
 
 class WL_KSVD():
     r""" An implementation of WL_KSVD
@@ -40,6 +41,7 @@ class WL_KSVD():
         epochs: int = 10,
         learning_rate: float = 0.025,
         min_count: int = 5,
+        min_features: int = 50,
         seed: int = 42,
         erase_base_features: bool = True,
         n_vocab: int = 1700,
@@ -47,6 +49,8 @@ class WL_KSVD():
         n_non_zero_coefs: int = 10,
         max_iter: int = 10,
         tol: float = 1e-6,
+        selection: str = "energy",
+        energy: float = 0.99,
         y_vocab_train: list = []
 
     ):
@@ -58,6 +62,7 @@ class WL_KSVD():
         self.epochs = epochs
         self.learning_rate = learning_rate
         self.min_count = min_count
+        self.min_features = min_features
         self.seed = seed
         self.erase_base_features = erase_base_features
         self.n_vocab = n_vocab
@@ -65,6 +70,8 @@ class WL_KSVD():
         self.n_non_zero_coefs = n_non_zero_coefs
         self.max_iter = max_iter
         self.tol = tol
+        self.selection = selection
+        self.energy = energy
         self.y_vocab_train = y_vocab_train
 
 
@@ -139,12 +146,64 @@ class WL_KSVD():
         scored_vocab.sort(key=lambda x: x[1], reverse=True)
 
         scores = np.array([x[1] for x in scored_vocab])
-        threshold = scores.mean() - scores.std()
-        trimmed_vocab = [item for item in scored_vocab if item[1] >= threshold]
+
+        max_score = scores.max()
+        if max_score > 0:
+            scores = scores / max_score
+            scored_vocab = [(word, score / max_score) for word, score in scored_vocab]
+
+
+        #-------------------------------------
+        #------------ Mean - Std -------------
+        #-------------------------------------
+        # threshold = scores.mean() - scores.std()
+        # trimmed_vocab = [item for item in scored_vocab if item[1] >= threshold]
+
+        #-------------------------------------
+        #-------- Adaptive Feature Cut -------
+        #-------------------------------------
+        # scored_vocab is sorted descending, so `scores` is a decreasing curve.
+        # Both cuts are data-driven (no fixed percentile). The energy cut keeps
+        # the top features covering `self.energy` of the summed score, which
+        # reaches into the weak tail the elbow discards -- trading a little
+        # runtime for the AUC that tail carries. See utils/elbow.py.
+        print(f"Total Features {len(scores)}")
+        if self.selection == "elbow":
+            n_keep, threshold = find_elbow_cut(scores, sorted_desc=True)
+            print(f"elbow cut at index {n_keep} (threshold {threshold:.6g})")
+        elif self.selection == "energy":
+            n_keep, threshold = find_energy_cut(
+                scores, energy=self.energy, sorted_desc=True,
+                min_keep=self.min_features,
+            )
+            print(f"energy cut ({self.energy:.4g}) at index {n_keep} "
+                  f"(threshold {threshold:.6g})")
+        elif self.selection == "none":
+            # No cut: score and rank as usual, then keep everything. Exists for
+            # the comparison arms in pca/, which need the full scored vocabulary
+            # so that selection is the ONLY thing differing between arms.
+            #
+            # Not expressible as energy=1.0: features scoring exactly 0 (equal
+            # presence in both classes) make the cumulative-score curve plateau
+            # before the last rank, so an energy target of 1.0 still cuts them.
+            # MUTAG has such features; nci_full does not. Hence an explicit path.
+            n_keep, threshold = len(scores), float(scores[-1])
+            print(f"no cut: keeping all {n_keep} features "
+                  f"(lowest score {threshold:.6g})")
+        else:
+            raise ValueError(
+                f"unknown selection method {self.selection!r}; "
+                "expected 'energy', 'elbow' or 'none'"
+            )
+
+        # # Keep the full (pre-trim) score curve so the elbow can be plotted later,
+        # # once the artifact bundle directory exists (see utils/export.py).
+        self.selection_scores_ = scores
+        trimmed_vocab = scored_vocab[:n_keep]
 
         print(f"Selected {len(trimmed_vocab)} features via adaptive selection")
-        # if len(trimmed_vocab) < self.min_features:
-        #     trimmed_vocab = scored_vocab[:self.n_vocab]
+        if len(trimmed_vocab) < self.min_features:
+            trimmed_vocab = scored_vocab[:self.n_vocab]
 
         self.n_vocab = len(trimmed_vocab)
         return trimmed_vocab
