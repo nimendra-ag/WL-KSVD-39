@@ -16,7 +16,7 @@ from utils.elbow import plot_cdf_curve
 
 N_RUNS = 5
 # Dictionary size: number of KSVD atoms, i.e. the embedding dimensionality.
-n_dimensions = 512
+n_dimensions = 128
 DATASET_ID = 1
 DATASET_NAME = f"NCI_full / {DATASET_ID}total-connect.sdf"
 # Slug used to name this dataset's output folders (one per dataset, not per run).
