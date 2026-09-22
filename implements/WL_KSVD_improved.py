@@ -95,62 +95,53 @@ class WL_KSVD():
         return documents
 
     def create_vocab(self, corpus, labels):
-        unique_classes = sorted(set(labels))
-        n_classes = len(unique_classes)
+        majority_df = Counter()
+        minority_df = Counter()
 
-        # Per-class document frequency and class sizes
-        class_df = {c: Counter() for c in unique_classes}
-        class_counts = Counter(labels)
+        majority_graphs = 0
+        minority_graphs = 0
 
         for doc, label in zip(corpus, labels):
-            unique_words = set(doc.words)
-            for word in unique_words:
-                class_df[label][word] += 1
 
-        # ── Expose to interpreter ─────────────────────────────────────────────
-        # Stored before scoring so the interpreter always has the full statistics,
-        # even for tokens that are later trimmed from the final vocabulary.
-        self.class_df = class_df
-        self.class_counts = class_counts
-        # ─────────────────────────────────────────────────────────────────────
+            # unique subtree hashes in this graph
+            # document frequency instead of raw counts
+            unique_words = Counter(doc.words)
+            if label == -1:
+                majority_graphs += 1
+                for word in unique_words:
+                    majority_df[word] += 1
+            else:
+                minority_graphs += 1
+                for word in unique_words:
+                    minority_df[word] += 1
 
-        all_words = set()
-        for df in class_df.values():
-            all_words.update(df.keys())
+        all_words = set(list(majority_df.keys()) + list(minority_df.keys()))
 
         scored_vocab = []
 
         for word in all_words:
-            # Normalized document frequency per class
-            p = {
-                c: class_df[c][word] / class_counts[c]
-                for c in unique_classes
-            }
+            p_majority = majority_df[word] / majority_graphs
 
-            # Mean pairwise Hellinger distance
-            hellinger_sum = 0.0
-            n_pairs = 0
-            for i in range(n_classes):
-                for j in range(i + 1, n_classes):
-                    ci, cj = unique_classes[i], unique_classes[j]
-                    hellinger_sum += abs(np.sqrt(p[ci]) - np.sqrt(p[cj]))
-                    n_pairs += 1
+            p_minority = (minority_df[word] / minority_graphs)
 
-            discriminative_score = hellinger_sum / n_pairs if n_pairs > 0 else 0.0
+            discriminative_score = np.sqrt(p_majority) - np.sqrt(p_minority)
 
-            total_presence = sum(p.values()) / n_classes
+            total_presence = p_majority + p_minority
 
+            # Final score
+           
             score = total_presence * discriminative_score
             scored_vocab.append((word, score))
 
-        scored_vocab.sort(key=lambda x: x[1], reverse=True)
+        # Sort features by discriminative importance
+        scored_vocab = sorted(
+            scored_vocab,
+            key=lambda x: x[1],
+            reverse=True
+        )
 
+        # selection
         scores = np.array([x[1] for x in scored_vocab])
-
-        max_score = scores.max()
-        if max_score > 0:
-            scores = scores / max_score
-            scored_vocab = [(word, score / max_score) for word, score in scored_vocab]
 
 
         #-------------------------------------
