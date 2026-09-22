@@ -7,7 +7,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from implements.WL_KSVD import WL_KSVD
 from sklearn.preprocessing import MaxAbsScaler
-from sklearn.metrics import roc_auc_score, f1_score
+from sklearn.metrics import (
+    roc_auc_score, f1_score, average_precision_score,
+    recall_score, precision_score, matthews_corrcoef,
+    balanced_accuracy_score, confusion_matrix,
+)
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
@@ -20,20 +24,57 @@ n_dimensions = 128
 DATASET_ID = 1
 DATASET_NAME = f"NCI_full / {DATASET_ID}total-connect.sdf"
 
+RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 graphDataLoader = GraphDataLoader(dataset_id=DATASET_ID)
 graphs, y = graphDataLoader.nci_full_graphs, graphDataLoader.nci_full_labels
 
-# metrics collected across runs, per model
-results = {
-    "Logistic Regression": {"auc": [], "f1": []},
-    "Gradient Boosting": {"auc": [], "f1": []},
-    "SVM": {"auc": [], "f1": []},
-    "Random Forest": {"auc": [], "f1": []},
-}
 
-# per-run bookkeeping: the seed and the vocabulary size the trim kept.
-# Feature counts are shared by every model in a run, so they live here rather
-# than being duplicated inside `results`.
+# ── Helper: evaluate one classifier and return all metrics ──────────────
+def evaluate_classifier(clf, X_test, y_test):
+    """Return a dict of metrics for a fitted classifier."""
+    y_pred = clf.predict(X_test)
+    y_proba = clf.predict_proba(X_test)[:, 1]
+
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[-1, 1]).ravel()
+
+    return {
+        # ── global metrics ──
+        "roc_auc":      roc_auc_score(y_test, y_proba),
+        "pr_auc":       average_precision_score(y_test, y_proba),
+        "f1":           f1_score(y_test, y_pred),
+        "mcc":          matthews_corrcoef(y_test, y_pred),
+        "balanced_acc": balanced_accuracy_score(y_test, y_pred),
+        # ── minority (active, label=1) ──
+        "min_recall":    tp / (tp + fn) if (tp + fn) > 0 else 0.0,
+        "min_precision": tp / (tp + fp) if (tp + fp) > 0 else 0.0,
+        "min_tp": tp,
+        "min_fn": fn,
+        # ── majority (inactive, label=-1) ──
+        "maj_recall":    tn / (tn + fp) if (tn + fp) > 0 else 0.0,
+        "maj_precision": tn / (tn + fn) if (tn + fn) > 0 else 0.0,
+        "maj_tn": tn,
+        "maj_fp": fp,
+    }
+
+
+# ── Metric keys tracked per model ──────────────────────────────────────
+METRIC_KEYS = [
+    "roc_auc", "pr_auc", "f1", "mcc", "balanced_acc",
+    "min_recall", "min_precision",
+    "maj_recall", "maj_precision",
+]
+
+MODEL_NAMES = [
+    "Logistic Regression",
+    "Gradient Boosting",
+    "SVM",
+    "Random Forest",
+]
+
+results = {name: {k: [] for k in METRIC_KEYS} for name in MODEL_NAMES}
+
+# per-run bookkeeping
 run_seeds = []
 run_features_selected = []
 run_features_total = []
@@ -45,7 +86,9 @@ for run in range(N_RUNS):
     print(f"\n===== Run {run + 1}/{N_RUNS} (seed={seed}) =====")
 
     # Over-fit protection
-    G_train, G_test, y_train, y_test = train_test_split(graphs, y, test_size=0.2, random_state=seed)
+    G_train, G_test, y_train, y_test = train_test_split(
+        graphs, y, test_size=0.2, random_state=seed
+    )
 
     # divide the train set further into vocab training and ML training sets
     G_vocab_train, G_ML_train, y_vocab_train, y_ML_train = train_test_split(
@@ -75,51 +118,41 @@ for run in range(N_RUNS):
     X_ML_train_scaled = scaler.fit_transform(X_ML_train)
     X_ML_test_scaled = scaler.transform(X_ML_test)
 
-    # Applying ML models
+    # ── Applying ML models ──────────────────────────────────────────────
     print("Applying ML models")
 
-    print("Predicting with Logistic Regression")
-    clf = LogisticRegression(random_state=seed).fit(X_ML_train_scaled, y_ML_train)
-    y_proba = clf.predict_proba(X_ML_test_scaled)[:, 1]
-    auc = roc_auc_score(y_test, y_proba)
-    f1 = f1_score(y_test, clf.predict(X_ML_test_scaled))
-    results["Logistic Regression"]["auc"].append(auc)
-    results["Logistic Regression"]["f1"].append(f1)
-    print(f"AUC: {auc:.4f}, F1: {f1:.4f}")
+    classifiers = {
+        "Logistic Regression": LogisticRegression(random_state=seed),
+        "Gradient Boosting":   GradientBoostingClassifier(random_state=seed),
+        "SVM":                 CalibratedClassifierCV(LinearSVC(random_state=seed)),
+        "Random Forest":       RandomForestClassifier(random_state=seed),
+    }
 
-    print("Predicting with Gradient Boosting")
-    clf = GradientBoostingClassifier(random_state=seed).fit(X_ML_train_scaled, y_ML_train)
-    y_proba = clf.predict_proba(X_ML_test_scaled)[:, 1]
-    auc = roc_auc_score(y_test, y_proba)
-    f1 = f1_score(y_test, clf.predict(X_ML_test_scaled))
-    results["Gradient Boosting"]["auc"].append(auc)
-    results["Gradient Boosting"]["f1"].append(f1)
-    print(f"AUC: {auc:.4f}, F1: {f1:.4f}")
+    for model_name, clf in classifiers.items():
+        print(f"Predicting with {model_name}")
+        clf.fit(X_ML_train_scaled, y_ML_train)
+        m = evaluate_classifier(clf, X_ML_test_scaled, y_test)
 
-    print("Predicting with SVM")
-    clf = CalibratedClassifierCV(LinearSVC(random_state=seed)).fit(X_ML_train_scaled, y_ML_train)
-    y_proba = clf.predict_proba(X_ML_test_scaled)[:, 1]
-    auc = roc_auc_score(y_test, y_proba)
-    f1 = f1_score(y_test, clf.predict(X_ML_test_scaled))
-    results["SVM"]["auc"].append(auc)
-    results["SVM"]["f1"].append(f1)
-    print(f"AUC: {auc:.4f}, F1: {f1:.4f}")
+        for k in METRIC_KEYS:
+            results[model_name][k].append(m[k])
 
-    print("Predicting with Random Forest")
-    clf = RandomForestClassifier(random_state=seed).fit(X_ML_train_scaled, y_ML_train)
-    y_proba = clf.predict_proba(X_ML_test_scaled)[:, 1]
-    auc = roc_auc_score(y_test, y_proba)
-    f1 = f1_score(y_test, clf.predict(X_ML_test_scaled))
-    results["Random Forest"]["auc"].append(auc)
-    results["Random Forest"]["f1"].append(f1)
-    print(f"AUC: {auc:.4f}, F1: {f1:.4f}")
+        print(f"  ROC-AUC={m['roc_auc']:.4f}  PR-AUC={m['pr_auc']:.4f}  "
+              f"F1={m['f1']:.4f}  MCC={m['mcc']:.4f}  "
+              f"BalAcc={m['balanced_acc']:.4f}")
+        print(f"  Minority  → recall={m['min_recall']:.4f}  "
+              f"precision={m['min_precision']:.4f}  "
+              f"(TP={m['min_tp']}, FN={m['min_fn']})")
+        print(f"  Majority  → recall={m['maj_recall']:.4f}  "
+              f"precision={m['maj_precision']:.4f}  "
+              f"(TN={m['maj_tn']}, FP={m['maj_fp']})")
 
 end_time = time.perf_counter()
 duration = end_time - start_time
 
-# Summarize mean/std across runs
+
+# ── Summary ─────────────────────────────────────────────────────────────
 summary_lines = [
-    f"WL+KSVD results over {N_RUNS} runs",
+    f"WL+KSVD (baseline / frequency) results over {N_RUNS} runs",
     f"Dataset: {DATASET_NAME} ({len(graphs)} graphs)",
     f"Dictionary size (KSVD atoms): {n_dimensions}",
     f"Generated: {datetime.now().isoformat(timespec='seconds')}",
@@ -127,35 +160,65 @@ summary_lines = [
     "",
 ]
 
-header = f"{'run':>4} {'seed':>6} {'features':>12} {'AUC':>8} {'F1':>8}"
-
-print("\n===== Summary (mean +/- std over {} runs) =====".format(N_RUNS))
+print(f"\n{'='*80}")
+print(f"Summary (mean ± std over {N_RUNS} runs)")
 print(f"Dataset: {DATASET_NAME} | Dictionary size: {n_dimensions}")
-for model_name, metrics in results.items():
-    auc_mean, auc_std = np.mean(metrics["auc"]), np.std(metrics["auc"])
-    f1_mean, f1_std = np.mean(metrics["f1"]), np.std(metrics["f1"])
-    line = f"{model_name}: AUC = {auc_mean:.4f} +/- {auc_std:.4f}, F1 = {f1_mean:.4f} +/- {f1_std:.4f}"
-    print(line)
-    summary_lines.append(line)
+print(f"{'='*80}")
 
-    # Per-run detail: seed and kept-feature count next to that run's scores
-    print("  " + header)
-    summary_lines.append("  " + header)
-    for i in range(len(metrics["auc"])):
+for model_name in MODEL_NAMES:
+    metrics = results[model_name]
+
+    # ── Per-metric mean ± std ──
+    line_global = (
+        f"{model_name}:\n"
+        f"  ROC-AUC      = {np.mean(metrics['roc_auc']):.4f} ± {np.std(metrics['roc_auc']):.4f}\n"
+        f"  PR-AUC       = {np.mean(metrics['pr_auc']):.4f} ± {np.std(metrics['pr_auc']):.4f}\n"
+        f"  F1           = {np.mean(metrics['f1']):.4f} ± {np.std(metrics['f1']):.4f}\n"
+        f"  MCC          = {np.mean(metrics['mcc']):.4f} ± {np.std(metrics['mcc']):.4f}\n"
+        f"  Balanced Acc = {np.mean(metrics['balanced_acc']):.4f} ± {np.std(metrics['balanced_acc']):.4f}\n"
+        f"  ── Minority (active) ──\n"
+        f"    Recall     = {np.mean(metrics['min_recall']):.4f} ± {np.std(metrics['min_recall']):.4f}\n"
+        f"    Precision  = {np.mean(metrics['min_precision']):.4f} ± {np.std(metrics['min_precision']):.4f}\n"
+        f"  ── Majority (inactive) ──\n"
+        f"    Recall     = {np.mean(metrics['maj_recall']):.4f} ± {np.std(metrics['maj_recall']):.4f}\n"
+        f"    Precision  = {np.mean(metrics['maj_precision']):.4f} ± {np.std(metrics['maj_precision']):.4f}"
+    )
+    print(line_global)
+    summary_lines.append(line_global)
+
+    # ── Per-run detail ──
+    header = (f"  {'run':>4} {'seed':>6} {'features':>12} "
+              f"{'ROC-AUC':>8} {'PR-AUC':>8} {'F1':>6} {'MCC':>6} "
+              f"{'MinRec':>7} {'MinPre':>7} {'MajRec':>7} {'MajPre':>7}")
+    print(header)
+    summary_lines.append(header)
+
+    for i in range(N_RUNS):
         features = f"{run_features_selected[i]}/{run_features_total[i]}"
-        row = (f"{i + 1:>4} {run_seeds[i]:>6} {features:>12} "
-               f"{metrics['auc'][i]:>8.4f} {metrics['f1'][i]:>8.4f}")
-        print("  " + row)
-        summary_lines.append("  " + row)
+        row = (
+            f"  {i+1:>4} {run_seeds[i]:>6} {features:>12} "
+            f"{metrics['roc_auc'][i]:>8.4f} "
+            f"{metrics['pr_auc'][i]:>8.4f} "
+            f"{metrics['f1'][i]:>6.4f} "
+            f"{metrics['mcc'][i]:>6.4f} "
+            f"{metrics['min_recall'][i]:>7.4f} "
+            f"{metrics['min_precision'][i]:>7.4f} "
+            f"{metrics['maj_recall'][i]:>7.4f} "
+            f"{metrics['maj_precision'][i]:>7.4f}"
+        )
+        print(row)
+        summary_lines.append(row)
     summary_lines.append("")
 
 # Save results to file
 results_dir = os.path.join(os.path.dirname(__file__), "..", "results")
 os.makedirs(results_dir, exist_ok=True)
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-results_path = os.path.join(results_dir, f"wl_aksvd_results_nci_{graphDataLoader.dataset_id}_{n_dimensions}_{timestamp}.txt")
+results_path = os.path.join(
+    results_dir,
+    f"wl_aksvd_results_nci_{graphDataLoader.dataset_id}_{n_dimensions}_{RUN_TIMESTAMP}.txt",
+)
 
-with open(results_path, "w") as f:
+with open(results_path, "w", encoding="utf-8") as f:
     f.write("\n".join(summary_lines) + "\n")
 
 print(f"\nResults saved to {results_path}")

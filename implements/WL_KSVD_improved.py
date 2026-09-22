@@ -51,7 +51,8 @@ class WL_KSVD():
         tol: float = 1e-6,
         selection: str = "energy",
         energy: float = 0.99,
-        y_vocab_train: list = []
+        y_vocab_train: list = [],
+        disc_weighting: bool = True,
 
     ):
         self.wl_iterations = wl_iterations
@@ -73,6 +74,7 @@ class WL_KSVD():
         self.selection = selection
         self.energy = energy
         self.y_vocab_train = y_vocab_train
+        self.disc_weighting = disc_weighting
 
 
     def createWLhash(self, graph_list):
@@ -124,14 +126,19 @@ class WL_KSVD():
 
             p_minority = (minority_df[word] / minority_graphs)
 
-            discriminative_score = np.sqrt(p_majority) - np.sqrt(p_minority)
+            discriminative_score = abs(np.sqrt(p_majority) - np.sqrt(p_minority))
 
             total_presence = p_majority + p_minority
 
-            # Final score
-           
+            # Final score (used for ranking/selection)
             score = total_presence * discriminative_score
-            scored_vocab.append((word, score))
+
+            # ── FIX: store the absolute Hellinger distance as a feature
+            # weight so calc_coefficients can carry class-aware signal into
+            # the data matrix, not just use it for selection/ranking.
+            disc_weight = abs(discriminative_score)
+
+            scored_vocab.append((word, score, disc_weight))
 
         # Sort features by discriminative importance
         scored_vocab = sorted(
@@ -170,14 +177,6 @@ class WL_KSVD():
             print(f"energy cut ({self.energy:.4g}) at index {n_keep} "
                   f"(threshold {threshold:.6g})")
         elif self.selection == "none":
-            # No cut: score and rank as usual, then keep everything. Exists for
-            # the comparison arms in pca/, which need the full scored vocabulary
-            # so that selection is the ONLY thing differing between arms.
-            #
-            # Not expressible as energy=1.0: features scoring exactly 0 (equal
-            # presence in both classes) make the cumulative-score curve plateau
-            # before the last rank, so an energy target of 1.0 still cuts them.
-            # MUTAG has such features; nci_full does not. Hence an explicit path.
             n_keep, threshold = len(scores), float(scores[-1])
             print(f"no cut: keeping all {n_keep} features "
                   f"(lowest score {threshold:.6g})")
@@ -187,8 +186,8 @@ class WL_KSVD():
                 "expected 'energy', 'elbow' or 'none'"
             )
 
-        # # Keep the full (pre-trim) score curve so the elbow can be plotted later,
-        # # once the artifact bundle directory exists (see utils/export.py).
+        # Keep the full (pre-trim) score curve so the elbow can be plotted later,
+        # once the artifact bundle directory exists (see utils/export.py).
         self.selection_scores_ = scores
         trimmed_vocab = scored_vocab[:n_keep]
 
@@ -203,17 +202,34 @@ class WL_KSVD():
 
         sparse_vector = np.zeros([len(corpus), self.n_vocab])
 
-        i = 0
-        for corpus in corpus:
-            words = corpus.words
+        # ── FIX: extract the disc_weight vector once, up front.
+        # Each vocab entry is now (word, score, disc_weight).
+        # When disc_weighting is enabled, raw counts are scaled by disc_weight
+        # so that the data matrix (not just the selection) is class-aware.
+        disc_weights = np.array([entry[2] for entry in vocab])
 
-            words_count = Counter(corpus.words)
+        i = 0
+        for doc in corpus:
+            words_count = Counter(doc.words)
             j = 0
-            for atom, _ in vocab:
+            for atom, _, _ in vocab:
                 sparse_vector[i][j] = words_count[atom]
                 j = j + 1
 
             i = i + 1
+
+        if self.disc_weighting:
+            # Column-wise multiplication: each feature column is scaled by
+            # its absolute Hellinger distance.  Features that are more
+            # discriminative between classes get amplified; features that
+            # look similar across classes get suppressed.  This carries the
+            # class-awareness from the selection stage into the actual data
+            # that KSVD sees.
+            sparse_vector = sparse_vector * disc_weights[np.newaxis, :]
+            print(f"Applied discriminative feature weighting "
+                  f"(min={disc_weights.min():.4f}, "
+                  f"max={disc_weights.max():.4f}, "
+                  f"mean={disc_weights.mean():.4f})")
 
         return sparse_vector
 
